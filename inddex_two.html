@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="initial-scale=1,user-scalable=no,maximum-scale=1,width=device-width">
+<title>Accra Parcel WebGIS – Leaflet</title>
+
+<link rel="stylesheet" href="css/leaflet.css">
+<link rel="stylesheet" href="css/fontawesome-all.min.css">
+
+<script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+
+<style>
+html, body { height:100%; margin:0; font-family:Arial,sans-serif; }
+
+/* LEFT SIDEBAR */
+#sidebar-left {
+  position:absolute;
+  top:0; left:0;
+  width:320px; height:100%;
+  background:#fff;
+  padding:15px;
+  z-index:1000;
+  overflow-y:auto;
+  box-shadow:2px 0 6px rgba(0,0,0,0.3);
+}
+
+#sidebar-left label { font-weight:bold; margin-top:10px; display:block; }
+#sidebar-left select, #sidebar-left button { width:100%; padding:6px; margin-top:5px; }
+
+/* RIGHT SIDEBAR */
+#sidebar-right {
+  position:absolute;
+  right:0;
+  bottom:40px;
+  width:340px;
+  background:#fff;
+  padding:12px;
+  z-index:1000;
+  box-shadow:-2px 0 6px rgba(0,0,0,0.3);
+  display:none;
+}
+
+.legal-text {
+  font-size:12px;
+  line-height:1.5;
+  text-align:justify;
+}
+
+/* MAP */
+#map {
+  position:absolute;
+  top:0; bottom:0;
+  left:320px; right:0;
+}
+
+#toggle-law {
+  position:absolute;
+  right:10px;
+  bottom:10px;
+  z-index:1100;
+  padding:6px 10px;
+}
+</style>
+</head>
+
+<body>
+
+<!-- LEFT SIDEBAR -->
+<div id="sidebar-left">
+  <h3>Parcel Filter</h3>
+
+  <label>Surveyor</label>
+  <select id="surveyorFilter"><option value="">All</option></select>
+
+  <label>Tenure Type</label>
+  <select id="tenureFilter"><option value="">All</option></select>
+
+  <label>Registration Status</label>
+  <select id="regisFilter"><option value="">All</option></select>
+
+  <button onclick="applyFilter()">Apply Filter</button>
+  <button onclick="resetFilter()">Reset</button>
+
+  <hr>
+  <b>Filtered Parcels:</b> <span id="parcelCount">0</span>
+
+  <hr>
+  <button onclick="exportCSV()">Export CSV</button>
+  <button onclick="exportGeoJSON()">Export GeoJSON</button>
+</div>
+
+<!-- RIGHT SIDEBAR -->
+<div id="sidebar-right">
+  <h4>LAND ACT 2020 (ACT 1036)</h4>
+  <p class="legal-text">
+    NOTICE OF APPLICATION FOR REGISTRATION OF DEED TO LAND<br><br>
+    Take Notice that the under mentioned persons have applied to be registered
+    as proprietors of the under mentioned lands and that I intend to register
+    them as proprietors of the said lands if no objections are lodged against
+    the registration in accordance with the provisions of the Land Act, 2020
+    (Act 1036) at the offices of the Land Registration Division – Lands
+    Commission, (Greater Accra Regional Office), Accra after the expiration
+    of fourteen (14) days from the date of this notice.
+  </p>
+</div>
+
+<button id="toggle-law" onclick="toggleLaw()">Land Act Notice</button>
+
+<div id="map"></div>
+
+<script src="js/leaflet.js"></script>
+<script src="data/Accra_Boundary_1.js"></script>
+<script src="data/Accra_Landuse_OSM_2.js"></script>
+<script src="data/Accra_waterOSM_3.js"></script>
+<script src="data/Parcels_4.js"></script>
+
+<script>
+/* MAP */
+var map = L.map('map').setView([5.6,-0.18], 10);
+
+var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  maxZoom:19
+}).addTo(map);
+
+/* STYLES */
+function parcelStyle() {
+  return { color:'#333', weight:1, fillColor:'#a47158', fillOpacity:0.7 };
+}
+function filteredStyle() {
+  return { color:'#0047ff', weight:2, fillColor:'#3399ff', fillOpacity:0.8 };
+}
+function boundaryStyle() {
+  return { color:'#006400', weight:3, fillOpacity:0 };
+}
+
+/* POPUP – ONLY FOR PARCELS */
+function parcelPopup(feature, layer) {
+  layer.bindPopup(
+    "<b>Parcel ID:</b> " + feature.properties.Parcel_ID + "<br>" +
+    "<b>Surveyor:</b> " + feature.properties.Surveyor + "<br>" +
+    "<b>Tenure:</b> " + feature.properties.Tenure_typ + "<br>" +
+    "<b>Registration:</b> " + feature.properties.Regis_stat
+  );
+}
+
+/* LAYERS */
+var parcels = L.geoJson(json_Parcels_4, {
+  style: parcelStyle,
+  onEachFeature: parcelPopup
+}).addTo(map);
+
+var filtered = L.geoJson(null, {
+  style: filteredStyle
+}).addTo(map);
+
+var accraBoundary = L.geoJson(json_Accra_Boundary_1, { style: boundaryStyle });
+var accraWater = L.geoJson(json_Accra_waterOSM_3, { color:'#00bcd4', weight:1 });
+var accraLanduse = L.geoJson(json_Accra_Landuse_OSM_2, { color:'#8e44ad', weight:1 });
+
+/* LAYER CONTROL (Filtered layer removed) */
+L.control.layers(
+  { "OpenStreetMap": osm },
+  {
+    "Parcels": parcels,
+    "Accra Boundary": accraBoundary,
+    "Accra Water (OSM)": accraWater,
+    "Accra Land Use (OSM)": accraLanduse
+  },
+  { collapsed:true }
+).addTo(map);
+
+/* FILTER SETUP */
+function populateFilters() {
+  let s=new Set(), t=new Set(), r=new Set();
+  json_Parcels_4.features.forEach(f=>{
+    s.add(f.properties.Surveyor);
+    t.add(f.properties.Tenure_typ);
+    r.add(f.properties.Regis_stat);
+  });
+  fill("surveyorFilter",s);
+  fill("tenureFilter",t);
+  fill("regisFilter",r);
+}
+function fill(id,vals){
+  let el=document.getElementById(id);
+  vals.forEach(v=>{
+    if(v){ let o=document.createElement("option"); o.value=v; o.text=v; el.appendChild(o); }
+  });
+}
+populateFilters();
+
+/* APPLY FILTER */
+function applyFilter(){
+  filtered.clearLayers();
+  let s=surveyorFilter.value, t=tenureFilter.value, r=regisFilter.value;
+  let count=0;
+
+  json_Parcels_4.features.forEach(f=>{
+    if(
+      (s===""||f.properties.Surveyor===s) &&
+      (t===""||f.properties.Tenure_typ===t) &&
+      (r===""||f.properties.Regis_stat===r)
+    ){
+      filtered.addData(f);
+      count++;
+    }
+  });
+  parcelCount.innerText = count;
+  if(count>0) map.fitBounds(filtered.getBounds());
+}
+
+/* RESET */
+function resetFilter(){
+  filtered.clearLayers();
+  parcelCount.innerText=0;
+  surveyorFilter.value="";
+  tenureFilter.value="";
+  regisFilter.value="";
+}
+
+/* EXPORT */
+function exportCSV(){
+  let rows=[];
+  filtered.eachLayer(l=>rows.push(l.feature.properties));
+  saveAs(new Blob([Papa.unparse(rows)],{type:"text/csv"}),"filtered_parcels.csv");
+}
+function exportGeoJSON(){
+  saveAs(
+    new Blob([JSON.stringify(filtered.toGeoJSON())],{type:"application/json"}),
+    "filtered_parcels.geojson"
+  );
+}
+
+/* LAW TOGGLE */
+function toggleLaw(){
+  let el=document.getElementById("sidebar-right");
+  el.style.display = (el.style.display==="none") ? "block" : "none";
+}
+</script>
+
+</body>
+</html>
